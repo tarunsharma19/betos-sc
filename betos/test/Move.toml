@@ -1,0 +1,16 @@
+[package]
+name = "betos-demo"
+version = "1.0.0"
+authors = []
+
+[addresses]
+betos_addr='182bcdd5e193cfdf743565643ff8ee7315bdc1173a701d0cf7d276374ea5e267'
+
+[dev-addresses]
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-core.git"
+rev = "mainnet"
+subdir = "aptos-move/framework/aptos-framework"
+
+[dev-dependencies]
