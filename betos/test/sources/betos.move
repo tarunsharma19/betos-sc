@@ -1,8 +1,18 @@
 module betos_addr::betos {
+    use aptos_framework::object::{Self, Object, ExtendRef};
     use aptos_framework::signer;
-    use aptos_framework::vector;
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::fungible_asset::{Self, FungibleStore, Metadata};
+    use aptos_framework::coin::{Self, Coin};
+    use aptos_framework::aptos_coin::{Self, AptosCoin};
     use aptos_framework::account;
 
+
+    use std::vector;
+    use std::option;
+    use std::string::{Self, utf8};
+
+    
     const STATUS_SCHEDULED: u8 = 0;
     const STATUS_FINISHED: u8 = 1;
     const STATUS_CANCELLED: u8 = 2;
@@ -10,6 +20,9 @@ module betos_addr::betos {
     const OUTCOME_HOME: u8 = 0;
     const OUTCOME_DRAW: u8 = 1;
     const OUTCOME_AWAY: u8 = 2;
+
+    const ASSET_NAME: vector<u8> = b"Betos Token";
+    const ASSET_SYMBOL: vector<u8> = b"BET";
 
     struct Market has key, store {
         admin: address,
@@ -30,6 +43,20 @@ module betos_addr::betos {
     struct Reward has key, store, drop {
         user: address,
         amount: u64,
+    }
+
+    fun init_module(deployer: &signer) {
+        // Create the fungible asset metadata object. 
+        let constructor_ref = &object::create_named_object(deployer, ASSET_SYMBOL);
+        primary_fungible_store::create_primary_store_enabled_fungible_asset(
+            constructor_ref,
+            option::none(),
+            utf8(ASSET_NAME), 
+            utf8(ASSET_SYMBOL), 
+            8, 
+            utf8(b"http://example.com/favicon.ico"), 
+            utf8(b"http://example.com"), 
+        );
     }
 
     /// Creates a new betting market
@@ -59,6 +86,10 @@ module betos_addr::betos {
     ) acquires Market {
         let market = borrow_global_mut<Market>(admin);
         assert!(market.status == STATUS_SCHEDULED, 101);
+
+        // Verify that the user is sending the exact amount of APT as wager
+        let coin = coin::withdraw<AptosCoin>(user, wager);
+        coin::deposit(admin, coin);
 
         let prediction = Prediction {
             user: signer::address_of(user),
@@ -101,10 +132,23 @@ module betos_addr::betos {
         }
     }
 
+    /// Distributes APT tokens as rewards
+    public entry fun distribute_rewards(admin: &signer) acquires Reward {
+        let admin_address = signer::address_of(admin);
+        let rewards = borrow_global_mut<Reward>(admin_address);
+        let reward_amount = rewards.amount;
+
+        coin::transfer<AptosCoin>(admin, rewards.user, reward_amount);
+
+        // Remove the reward entry
+        move_from<Reward>(admin_address);
+    }
+
     /// Allows a user to withdraw their winnings
     public entry fun withdraw_winnings(user: &signer) acquires Reward {
         let reward = borrow_global_mut<Reward>(signer::address_of(user));
-        let _amount = reward.amount;  // Prefixed with underscore to suppress warning
+        let amount = reward.amount;
+        coin::transfer<AptosCoin>(user, signer::address_of(user), amount);
         move_from<Reward>(signer::address_of(user));
     }
 
@@ -113,78 +157,76 @@ module betos_addr::betos {
         (wager * odds) / 100
     }
 
+    
     #[test(admin = @0x123, user1 = @0x456, user2 = @0x789)]
-    public entry fun test_betting_flow(admin: signer, user1: signer, user2: signer) acquires Market, Reward {
+    public entry fun test_betting_flow(admin: signer, user1: signer, user2: signer) 
+    acquires Market 
+    {
+        let admin_address = signer::address_of(&admin);
+        let user1_address = signer::address_of(&user1);
+        init_module(&admin);
         // Create accounts for admin, user1, and user2 for the test
-        account::create_account_for_test(signer::address_of(&admin));
-        account::create_account_for_test(signer::address_of(&user1));
-        account::create_account_for_test(signer::address_of(&user2));
-        
+        account::create_account_for_test(admin_address);
+        account::increment_sequence_number_for_test(admin_address);
+        account::create_account_for_test(user1_address);
+        account::increment_sequence_number_for_test(user1_address);
+        // account::create_account_for_test(signer::address_of(&user1));
+        // account::create_account_for_test(signer::address_of(&user2));
+        // aptos_coin::publish_store(&admin);
         // Initialize contract with admin account
         create_market(&admin, 1, 86400); // Market expiry set to 1 day in seconds
-        
+        //to pass our aptos coin balance assertion
+        // aptos_coin::deposit(admin_address, aptos_coin::mint_apt_fa_for_test(1001));
+        // aptos_coin::deposit(user1_address, aptos_coin::mint_apt_fa_for_test(1001));
+        primary_fungible_store::deposit(admin_address, aptos_coin::mint_apt_fa_for_test(1001));
+        primary_fungible_store::deposit(user1_address, aptos_coin::mint_apt_fa_for_test(1001));
+        // aptos_coin::mint_apt_fa_for_test(amount)
         // Admin places a bet on OUTCOME_HOME
         place_prediction(
-            signer::address_of(&admin),  // Admin's address
-            &admin,                      // Admin's signer
+            admin_address,  // Admin's address
+            &user1,                      // Admin's signer
             1,                           // Fixture ID
             OUTCOME_HOME,                // Outcome
-            100,                         // Wager
-            2                          // Odds
+            1,                         // Wager
+            2                            // Odds
         );
         
         // User1 places a bet on OUTCOME_HOME
-        // place_prediction(
-        //     signer::address_of(&admin),  // Admin's address (same market)
-        //     &user1,                      // User1's signer
-        //     1,                           // Fixture ID
-        //     OUTCOME_HOME,                // Outcome
-        //     150,                         // Wager
-        //     250                          // Odds
-        // );
-        
-        // User2 places a bet on OUTCOME_AWAY
-        // place_prediction(
-        //     signer::address_of(&admin),  // Admin's address (same market)
-        //     &user2,                      // User2's signer
-        //     1,                           // Fixture ID
-        //     OUTCOME_AWAY,                // Outcome
-        //     200,                         // Wager
-        //     300                          // Odds
-        // );
+        place_prediction(
+            admin_address,  // Admin's address (same market)
+            &user1,                      // User1's signer
+            1,                           // Fixture ID
+            OUTCOME_HOME,                // Outcome
+            150,                         // Wager
+            250                          // Odds
+        );
         
         // Fetch the market to verify the predictions
-        let market = borrow_global<Market>(signer::address_of(&admin));
-        // assert!(vector::length(&market.predictions) == 3, 4);
+        let market = borrow_global<Market>(admin_address);
         
         let prediction_admin = vector::borrow(&market.predictions, 0);
-        assert!(prediction_admin.user == signer::address_of(&admin), 5);
+        assert!(prediction_admin.user == admin_address, 5);
         assert!(prediction_admin.outcome == OUTCOME_HOME, 6);
         
-        // let prediction_user1 = vector::borrow(&market.predictions, 1);
-        // assert!(prediction_user1.user == signer::address_of(&user1), 7);
-        // assert!(prediction_user1.outcome == OUTCOME_HOME, 8);
-        
-        // let prediction_user2 = vector::borrow(&market.predictions, 2);
-        // assert!(prediction_user2.user == signer::address_of(&user2), 9);
-        // assert!(prediction_user2.outcome == OUTCOME_AWAY, 10);
+        let prediction_user1 = vector::borrow(&market.predictions, 1);
+        assert!(prediction_user1.user == signer::address_of(&user1), 7);
+        assert!(prediction_user1.outcome == OUTCOME_HOME, 8);
         
         // Resolve the market with OUTCOME_HOME as the result
         resolve_market(&admin, 1, STATUS_FINISHED, OUTCOME_HOME);
         
         // Verify reward allocation
-        let reward_admin = borrow_global<Reward>(signer::address_of(&admin));
-        assert!(reward_admin.amount == 2, 11); // Admin's reward: (100 * 200) / 100 = 200
+        let reward_admin = borrow_global<Reward>(admin_address);
+        assert!(reward_admin.amount == 200, 11); // Admin's reward: (100 * 2) / 100 = 200
         
-        // let reward_user1 = borrow_global<Reward>(signer::address_of(&user1));
-        // assert!(reward_user1.amount == 375, 12); // User1's reward: (150 * 250) / 100 = 375
+        let reward_user1 = borrow_global<Reward>(signer::address_of(&user1));
+        assert!(reward_user1.amount == 375, 12); // User1's reward: (150 * 2.5) / 100 = 375
         
-        // // User2 should not have received any reward
-        // assert!(!exists<Reward>(signer::address_of(&user2)), 13);
+        // Distribute rewards
+        distribute_rewards(&admin);
         
         // Admin and User1 withdraw their winnings
         withdraw_winnings(&admin);
-        // withdraw_winnings(&user1);
+        withdraw_winnings(&user1);
     }
-
 }
