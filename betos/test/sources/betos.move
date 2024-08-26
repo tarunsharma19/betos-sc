@@ -6,16 +6,22 @@ module betos_addr::betos {
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::{Self, AptosCoin};
     use aptos_framework::account;
+    use switchboard::aggregator; // For reading aggregators
+    use switchboard::math;
 
 
     use std::vector;
     use std::option;
+    use std::debug::print;
     use std::string::{Self, utf8};
 
     
     const STATUS_SCHEDULED: u8 = 0;
     const STATUS_FINISHED: u8 = 1;
     const STATUS_CANCELLED: u8 = 2;
+
+    const EAGGREGATOR_INFO_EXISTS:u64 = 0;
+    const ENO_AGGREGATOR_INFO_EXISTS:u64 = 1;
 
     const OUTCOME_HOME: u8 = 0;
     const OUTCOME_DRAW: u8 = 1;
@@ -44,6 +50,28 @@ module betos_addr::betos {
         user: address,
         amount: u64,
     }
+
+    struct AggregatorInfo has copy, drop, store, key {
+        aggregator_addr: address,
+        latest_result: u128,
+        latest_result_decimal: u8,
+    }
+
+    // add AggregatorInfo resource with latest value + aggregator address
+    public entry fun log_aggregator_info(
+        account: &signer,
+        aggregator_addr: address, 
+    ) {       
+        assert!(!exists<AggregatorInfo>(signer::address_of(account)), EAGGREGATOR_INFO_EXISTS);
+
+        // get latest value 
+        let (value, dec, _neg) = math::unpack(aggregator::latest_value(aggregator_addr)); 
+        move_to(account, AggregatorInfo {
+            aggregator_addr: aggregator_addr,
+            latest_result: value,
+            latest_result_decimal: dec
+        });
+    }   
 
     fun init_module(deployer: &signer) {
         // Create the fungible asset metadata object. 
@@ -224,7 +252,9 @@ module betos_addr::betos {
         
         // Distribute rewards
         distribute_rewards(&admin);
-        
+
+        log_aggregator_info(&admin,0x7457731ac96b5943d01f3f1ce1fe739b53ebc5aeec45432afa169515b9f7eb1b);
+
         // Admin and User1 withdraw their winnings
         withdraw_winnings(&admin);
         withdraw_winnings(&user1);

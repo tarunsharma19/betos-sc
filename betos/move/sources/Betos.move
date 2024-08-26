@@ -2,6 +2,8 @@ module 0x1::Betos {
     use 0x1::Signer;
     use 0x1::Vector;
     use 0x1::Address;
+    use Switchboard::Aggregator; // For reading aggregators
+
 
     // Define constants for Status
     const STATUS_SCHEDULED: u8 = 0;
