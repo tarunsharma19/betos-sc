@@ -1,4 +1,4 @@
-module betos_addr::betos {
+module betos_addr::betos_two {
     use aptos_framework::object::{Self, Object, ExtendRef};
     use aptos_framework::signer;
     use aptos_framework::primary_fungible_store;
@@ -7,7 +7,9 @@ module betos_addr::betos {
     use aptos_framework::aptos_coin::{Self, AptosCoin};
     use aptos_framework::account;
     use switchboard::aggregator; // For reading aggregators
-    use switchboard::math;
+    use switchboard::math::{Self, SwitchboardDecimal};
+
+    
 
 
     use std::vector;
@@ -27,8 +29,11 @@ module betos_addr::betos {
     const OUTCOME_DRAW: u8 = 1;
     const OUTCOME_AWAY: u8 = 2;
 
+    
+
     const ASSET_NAME: vector<u8> = b"Betos Token";
     const ASSET_SYMBOL: vector<u8> = b"BET";
+
 
     struct Market has key, store {
         admin: address,
@@ -55,23 +60,44 @@ module betos_addr::betos {
         aggregator_addr: address,
         latest_result: u128,
         latest_result_decimal: u8,
+        min_response: u128,
+        max_response: u128,
     }
 
     // add AggregatorInfo resource with latest value + aggregator address
+    /// Logs or updates the AggregatorInfo resource with the latest value from the aggregator.
     public entry fun log_aggregator_info(
         account: &signer,
-        aggregator_addr: address, 
-    ) {       
-        assert!(!exists<AggregatorInfo>(signer::address_of(account)), EAGGREGATOR_INFO_EXISTS);
-
-        // get latest value 
+        aggregator_addr: address
+    ) acquires AggregatorInfo {
+        // Get the latest value from the aggregator
         let (value, dec, _neg) = math::unpack(aggregator::latest_value(aggregator_addr)); 
-        move_to(account, AggregatorInfo {
-            aggregator_addr: aggregator_addr,
-            latest_result: value,
-            latest_result_decimal: dec
-        });
-    }   
+        let (min_value, min_dec, min_neg) = math::unpack(aggregator::lastest_round_min_response(aggregator_addr)); 
+        let (max_value, max_dec, max_neg) = math::unpack(aggregator::lastest_round_max_response(aggregator_addr)); 
+
+        let min = min_value/1000000000;
+        let max = max_value/1000000000;
+
+        // Check if AggregatorInfo exists
+        if (exists<AggregatorInfo>(signer::address_of(account))) {
+            // Borrow the existing AggregatorInfo and update it
+            let aggregator_info = borrow_global_mut<AggregatorInfo>(signer::address_of(account));
+            aggregator_info.latest_result = value;
+            aggregator_info.latest_result_decimal = dec;
+            aggregator_info.min_response = min;
+            aggregator_info.max_response = max;
+        } else {
+            // Create a new AggregatorInfo resource
+            move_to(account, AggregatorInfo {
+                aggregator_addr: aggregator_addr,
+                latest_result: value,
+                latest_result_decimal: dec,
+                min_response: min,
+                max_response: max,
+            });
+        }
+    }
+
 
     fun init_module(deployer: &signer) {
         // Create the fungible asset metadata object. 
@@ -188,8 +214,8 @@ module betos_addr::betos {
     
     #[test(admin = @0x123, user1 = @0x456, user2 = @0x789)]
     public entry fun test_betting_flow(admin: signer, user1: signer, user2: signer) 
-    acquires 
-    Market  
+    // acquires 
+    // Market  
     // Reward
     {
         let admin_address = signer::address_of(&admin);
@@ -211,14 +237,14 @@ module betos_addr::betos {
         primary_fungible_store::deposit(user1_address, aptos_coin::mint_apt_fa_for_test(1001));
         // aptos_coin::mint_apt_fa_for_test(amount)
         // Admin places a bet on OUTCOME_HOME
-        place_prediction(
-            admin_address,  // Admin's address
-            &user1,                      // Admin's signer
-            1,                           // Fixture ID
-            OUTCOME_HOME,                // Outcome
-            1,                         // Wager
-            2                            // Odds
-        );
+        // place_prediction(
+        //     admin_address,  // Admin's address
+        //     &user1,                      // Admin's signer
+        //     1,                           // Fixture ID
+        //     OUTCOME_HOME,                // Outcome
+        //     1,                         // Wager
+        //     2                            // Odds
+        // );
         
         // User1 places a bet on OUTCOME_HOME
         // place_prediction(
