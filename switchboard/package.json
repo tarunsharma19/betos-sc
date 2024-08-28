@@ -1,11 +1,25 @@
 {
   "name": "switchboard",
   "version": "1.0.0",
-  "description": "data feed deployer",
+  "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "npx tsc",
+    "start": "npm run build && node dist/index.js",
+    "dev": "nodemon src/index.ts",
+    "watch": "src",
+    "ext": "ts",
+    "exec": "concurrently \"npx tsc --watch\" \"ts-node src/index.ts\"",
+    "start-json": "json-server db.json --port 5000"
   },
+  "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@switchboard-xyz/aptos.js": "^3.0.0",
+    "aptos":"1.11.0"
+  }
 }
