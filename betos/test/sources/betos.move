@@ -29,6 +29,9 @@ module betos_addr::betos {
     const ASSET_NAME: vector<u8> = b"Betos Token";
     const ASSET_SYMBOL: vector<u8> = b"BET";
 
+    struct Markets has key {
+        _id : SimpleMap<u64 , Market>,
+    }
 
     struct Market has key, store {
         admin: address,
@@ -109,13 +112,12 @@ module betos_addr::betos {
         outcome: u8,
         oracle_address: address
     ) acquires Fixture {
-        // Check if the fixture already exists in the Fixture resource
-
         if (!exists<Fixture>(signer::address_of(admin))) {
             let _fixture:SimpleMap<u64,FixtureData> = simple_map::create();
             move_to(admin,Fixture{_id:_fixture});
         };
 
+        // Check if the fixture already exists in the Fixture resource
         let fixture = borrow_global_mut<Fixture>(signer::address_of(admin));
         // If the fixture_id already exists in the Fixture map, update the FixtureData.
         // Otherwise, create a new FixtureData and insert it into the Fixture map.
@@ -192,6 +194,42 @@ module betos_addr::betos {
         move_to(admin, market);
     }
 
+    /// Creates a new betting market
+    public entry fun create_market2(
+        admin: &signer,
+        fixture_id: u64,
+        expiry: u64
+    ) acquires Markets
+    {
+        if (!exists<Markets>(signer::address_of(admin))) {
+            let _market:SimpleMap<u64,Market> = simple_map::create();
+            move_to(admin,Markets{_id:_market});
+        };
+
+        let markets = borrow_global_mut<Markets>(signer::address_of(admin));
+
+        if (simple_map::contains_key(&markets._id, &fixture_id)) {
+            let market_data = simple_map::borrow_mut(&mut markets._id, &fixture_id);
+            market_data.admin = signer::address_of(admin);
+            market_data.fixture_id = fixture_id;
+            market_data.status = STATUS_SCHEDULED;
+            market_data.predictions= vector::empty<Prediction>();
+            market_data.expiry= expiry;
+        }
+        else{
+            let new_market = Market {
+            admin: signer::address_of(admin),
+            fixture_id,
+            status: STATUS_SCHEDULED,
+            predictions: vector::empty<Prediction>(),
+            expiry,
+            };
+            simple_map::add(&mut markets._id, fixture_id, new_market);
+        };
+
+        
+    }
+
     /// Allows a user to place a prediction on an existing market
     public entry fun place_prediction(
         admin: address,
@@ -262,9 +300,79 @@ module betos_addr::betos {
         };
         vector::push_back(&mut market.predictions, prediction);
     }
+
+    public entry fun place_prediction_3(
+        user: &signer,
+        admin: address,
+        fixture_id: u64,
+        outcome: u8,
+        wager: u64
+    ) acquires Markets, Fixture {
+
+        let market = borrow_global_mut<Markets>(admin);
+        let market_data = simple_map::borrow_mut(&mut market._id,&fixture_id);
+        
+        assert!(market_data.status == STATUS_SCHEDULED, 101);
+
+        // Retrieve the fixture data from the Fixture resource
+        let fixture = borrow_global<Fixture>(admin);
+
+        // Get the oracle address for the given fixture_id and outcome
+        let oracle_address = get_oracle_address(fixture, fixture_id, outcome);
+
+        // Call the oracle to get the odds using the log_aggregator_info function
+        let (odds, _, _) = math::unpack(aggregator::latest_value(oracle_address));
+
+        // Verify that the user is sending the exact amount of APT as wager
+        let coin = coin::withdraw<AptosCoin>(user, wager);
+        coin::deposit(admin, coin);
+
+        let odd:u64 = (odds as u64) / 1000000000;
+        // Store the prediction with the fetched odds
+        let prediction = Prediction {
+            user: signer::address_of(user),
+            fixture_id,
+            outcome,
+            wager,
+            odds: odd ,  // Adjusting odds by dividing by 10^9
+        };
+        vector::push_back(&mut market_data.predictions, prediction);
+    }
     
 
 
+    /// Resolves a market and calculates rewards
+    public entry fun resolve_market_2(
+        admin: &signer,
+        fixture_id: u64,
+        status: u8,
+        result: u8
+    ) acquires Markets {
+        let market = borrow_global_mut<Markets>(signer::address_of(admin));
+        let market_data = simple_map::borrow_mut(&mut market._id,&fixture_id);
+
+        assert!(signer::address_of(admin) == market_data.admin, 102);
+        assert!(market_data.status == STATUS_SCHEDULED, 103);
+
+        market_data.status = status;
+
+        if (status == STATUS_FINISHED) {
+            let len = vector::length(&market_data.predictions);
+            let i = 0;
+            while (i < len) {
+                let prediction = vector::borrow(&market_data.predictions, i);
+                if (prediction.outcome == result) {
+                    let reward_amount = calculate_reward(prediction.wager, prediction.odds);
+                    let reward = Reward {
+                        user: prediction.user,
+                        amount: reward_amount,
+                    };
+                    move_to(admin, reward);
+                };
+                i = i + 1;
+            }
+        }
+    }
     /// Resolves a market and calculates rewards
     public entry fun resolve_market(
         admin: &signer,
