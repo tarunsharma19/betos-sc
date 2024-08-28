@@ -1,5 +1,5 @@
 [package]
-name = "betos_two"
+name = "betos"
 version = "1.0.0"
 authors = []
 
@@ -8,7 +8,7 @@ authors = []
 Std = "0x1"
 AptosFramework = "0x1"
 switchboard = "0xb91d3fef0eeb4e685dc85e739c7d3e2968784945be4424e92e2f86e2418bf271"# Will change as we iterate on devnet
-betos_addr = "eccc2d38e0c721188830e96eff70fd1e5bf1319e29315c83a074c339325b16eb"
+betos_addr = "b2f653290771f172ad1252011556df877b89e963591762cdc949d5437fcbcec7"
 
 [dependencies]
 # MoveNursery = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/move-stdlib/nursery/", rev = "main" }

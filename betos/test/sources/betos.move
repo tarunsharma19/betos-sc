@@ -1,4 +1,4 @@
-module betos_addr::betos_two {
+module betos_addr::betos {
     use aptos_framework::object::{Self, Object, ExtendRef};
     use aptos_framework::signer;
     use aptos_framework::primary_fungible_store;
@@ -6,18 +6,15 @@ module betos_addr::betos_two {
     use aptos_framework::coin::{Self, Coin};
     use aptos_framework::aptos_coin::{Self, AptosCoin};
     use aptos_framework::account;
+    use aptos_std::simple_map::{Self, SimpleMap};
     use switchboard::aggregator; // For reading aggregators
     use switchboard::math::{Self, SwitchboardDecimal};
-
-    
-
 
     use std::vector;
     use std::option;
     use std::debug::print;
     use std::string::{Self, utf8};
 
-    
     const STATUS_SCHEDULED: u8 = 0;
     const STATUS_FINISHED: u8 = 1;
     const STATUS_CANCELLED: u8 = 2;
@@ -28,8 +25,6 @@ module betos_addr::betos_two {
     const OUTCOME_HOME: u8 = 0;
     const OUTCOME_DRAW: u8 = 1;
     const OUTCOME_AWAY: u8 = 2;
-
-    
 
     const ASSET_NAME: vector<u8> = b"Betos Token";
     const ASSET_SYMBOL: vector<u8> = b"BET";
@@ -64,6 +59,16 @@ module betos_addr::betos_two {
         max_response: u128,
     }
 
+    struct Fixture has key {
+        _id : SimpleMap<u64 , FixtureData>,
+    }
+
+    struct FixtureData has copy,drop,store {
+        home: address,
+        draw: address,
+        away: address,
+    }
+
     // add AggregatorInfo resource with latest value + aggregator address
     /// Logs or updates the AggregatorInfo resource with the latest value from the aggregator.
     public entry fun log_aggregator_info(
@@ -95,6 +100,64 @@ module betos_addr::betos_two {
                 min_response: min,
                 max_response: max,
             });
+        }
+    }
+
+    public entry fun set_oracle_addresses(
+        admin: &signer,
+        fixture_id: u64,
+        outcome: u8,
+        oracle_address: address
+    ) acquires Fixture {
+        // Check if the fixture already exists in the Fixture resource
+
+        if (!exists<Fixture>(signer::address_of(admin))) {
+            let _fixture:SimpleMap<u64,FixtureData> = simple_map::create();
+            move_to(admin,Fixture{_id:_fixture});
+        };
+
+        let fixture = borrow_global_mut<Fixture>(signer::address_of(admin));
+        // If the fixture_id already exists in the Fixture map, update the FixtureData.
+        // Otherwise, create a new FixtureData and insert it into the Fixture map.
+        if (simple_map::contains_key(&fixture._id, &fixture_id)) {
+            let fixture_data = simple_map::borrow_mut(&mut fixture._id, &fixture_id);
+            if (outcome == OUTCOME_HOME) {
+                fixture_data.home = oracle_address;
+            } else if (outcome == OUTCOME_DRAW) {
+                fixture_data.draw = oracle_address;
+            } else if (outcome == OUTCOME_AWAY) {
+                fixture_data.away = oracle_address;
+            } else {
+                abort 102; // Invalid outcome, should be one of OUTCOME_HOME, OUTCOME_DRAW, or OUTCOME_AWAY
+            }
+        } else {
+            // If the fixture does not exist, create a new FixtureData entry
+            let new_fixture_data = FixtureData {
+                home: if (outcome == OUTCOME_HOME) { oracle_address } else { @0x0 },
+                draw: if (outcome == OUTCOME_DRAW) { oracle_address } else { @0x0 },
+                away: if (outcome == OUTCOME_AWAY) { oracle_address } else { @0x0 },
+            };
+            simple_map::add(&mut fixture._id, fixture_id, new_fixture_data);
+        }
+    }
+
+    fun get_oracle_address(
+        fixture: &Fixture,
+        fixture_id: u64,
+        outcome: u8
+    ): address  {
+        // Retrieve the FixtureData for the given fixture_id
+        let fixture_data = simple_map::borrow(&fixture._id,&fixture_id);
+
+        // Return the oracle address based on the outcome
+        if (outcome == OUTCOME_HOME) {
+            return fixture_data.home
+        } else if (outcome == OUTCOME_DRAW) {
+            return fixture_data.draw
+        } else if (outcome == OUTCOME_AWAY) {
+            return fixture_data.away
+        } else {
+            return @0x0
         }
     }
 
@@ -135,25 +198,72 @@ module betos_addr::betos_two {
         user: &signer,
         fixture_id: u64,
         outcome: u8,
-        wager: u64,
-        odds: u64  // Odds are now passed when placing the bet
-    ) acquires Market {
+        wager: u64
+    ) acquires Market, Fixture {
         let market = borrow_global_mut<Market>(admin);
         assert!(market.status == STATUS_SCHEDULED, 101);
+
+        // Retrieve the fixture data from the Fixture resource
+        let fixture = borrow_global<Fixture>(admin);
+
+        // Get the oracle address for the given fixture_id and outcome
+        let oracle_address = get_oracle_address(fixture, fixture_id, outcome);
+
+        // Call the oracle to get the odds using the log_aggregator_info function
+        let (odds, _, _) = math::unpack(aggregator::latest_value(oracle_address));
 
         // Verify that the user is sending the exact amount of APT as wager
         let coin = coin::withdraw<AptosCoin>(user, wager);
         coin::deposit(admin, coin);
 
+        let odd:u64 = (odds as u64) / 1000000000;
+        // Store the prediction with the fetched odds
         let prediction = Prediction {
             user: signer::address_of(user),
             fixture_id,
             outcome,
             wager,
-            odds,  // Store the odds with the prediction
+            odds: odd ,  // Adjusting odds by dividing by 10^9
         };
         vector::push_back(&mut market.predictions, prediction);
     }
+
+    public entry fun place_prediction_2(
+        user: &signer,
+        admin: address,
+        fixture_id: u64,
+        outcome: u8,
+        wager: u64
+    ) acquires Market, Fixture {
+        let market = borrow_global_mut<Market>(admin);
+        assert!(market.status == STATUS_SCHEDULED, 101);
+
+        // Retrieve the fixture data from the Fixture resource
+        let fixture = borrow_global<Fixture>(admin);
+
+        // Get the oracle address for the given fixture_id and outcome
+        let oracle_address = get_oracle_address(fixture, fixture_id, outcome);
+
+        // Call the oracle to get the odds using the log_aggregator_info function
+        let (odds, _, _) = math::unpack(aggregator::latest_value(oracle_address));
+
+        // Verify that the user is sending the exact amount of APT as wager
+        let coin = coin::withdraw<AptosCoin>(user, wager);
+        coin::deposit(admin, coin);
+
+        let odd:u64 = (odds as u64) / 1000000000;
+        // Store the prediction with the fetched odds
+        let prediction = Prediction {
+            user: signer::address_of(user),
+            fixture_id,
+            outcome,
+            wager,
+            odds: odd ,  // Adjusting odds by dividing by 10^9
+        };
+        vector::push_back(&mut market.predictions, prediction);
+    }
+    
+
 
     /// Resolves a market and calculates rewards
     public entry fun resolve_market(
@@ -208,7 +318,7 @@ module betos_addr::betos_two {
 
     /// Calculates the reward based on the wager and odds
     fun calculate_reward(wager: u64, odds: u64): u64 {
-        (wager * odds) / 100
+        wager * odds
     }
 
     
