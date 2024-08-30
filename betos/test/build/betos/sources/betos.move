@@ -49,6 +49,10 @@ module betos_addr::betos {
         odds: u64,  // Odds specific to this prediction
     }
 
+    struct Rewards has key {
+        _id: SimpleMap<u64 , vector<Reward>>,
+    }
+
     struct Reward has key, store, drop {
         user: address,
         amount: u64,
@@ -184,22 +188,6 @@ module betos_addr::betos {
         admin: &signer,
         fixture_id: u64,
         expiry: u64
-    ) {
-        let market = Market {
-            admin: signer::address_of(admin),
-            fixture_id,
-            status: STATUS_SCHEDULED,
-            predictions: vector::empty<Prediction>(),
-            expiry,
-        };
-        move_to(admin, market);
-    }
-
-    /// Creates a new betting market
-    public entry fun create_market2(
-        admin: &signer,
-        fixture_id: u64,
-        expiry: u64
     ) acquires Markets
     {
         assert!(signer::address_of(admin) == @betos_addr, 102);
@@ -234,78 +222,8 @@ module betos_addr::betos {
     }
 
     /// Allows a user to place a prediction on an existing market
+  
     public entry fun place_prediction(
-        admin: address,
-        user: &signer,
-        fixture_id: u64,
-        outcome: u8,
-        wager: u64
-    ) acquires Market, Fixture {
-        let market = borrow_global_mut<Market>(admin);
-        assert!(market.status == STATUS_SCHEDULED, 101);
-
-        // Retrieve the fixture data from the Fixture resource
-        let fixture = borrow_global<Fixture>(admin);
-
-        // Get the oracle address for the given fixture_id and outcome
-        let oracle_address = get_oracle_address(fixture, fixture_id, outcome);
-
-        // Call the oracle to get the odds using the log_aggregator_info function
-        let (odds, _, _) = math::unpack(aggregator::latest_value(oracle_address));
-
-        // Verify that the user is sending the exact amount of APT as wager
-        let coin = coin::withdraw<AptosCoin>(user, wager);
-        coin::deposit(admin, coin);
-
-        let odd:u64 = (odds as u64) / 1000000000;
-        // Store the prediction with the fetched odds
-        let prediction = Prediction {
-            user: signer::address_of(user),
-            fixture_id,
-            outcome,
-            wager,
-            odds: odd ,  // Adjusting odds by dividing by 10^9
-        };
-        vector::push_back(&mut market.predictions, prediction);
-    }
-
-    public entry fun place_prediction_2(
-        user: &signer,
-        admin: address,
-        fixture_id: u64,
-        outcome: u8,
-        wager: u64
-    ) acquires Market, Fixture {
-
-        let market = borrow_global_mut<Market>(@betos_addr);
-        assert!(market.status == STATUS_SCHEDULED, 101);
-
-        // Retrieve the fixture data from the Fixture resource
-        let fixture = borrow_global<Fixture>(@betos_addr);
-
-        // Get the oracle address for the given fixture_id and outcome
-        let oracle_address = get_oracle_address(fixture, fixture_id, outcome);
-
-        // Call the oracle to get the odds using the log_aggregator_info function
-        let (odds, _, _) = math::unpack(aggregator::latest_value(oracle_address));
-
-        // Verify that the user is sending the exact amount of APT as wager
-        let coin = coin::withdraw<AptosCoin>(user, wager);
-        coin::deposit(@betos_addr, coin);
-
-        let odd:u64 = (odds as u64) / 1000000000;
-        // Store the prediction with the fetched odds
-        let prediction = Prediction {
-            user: signer::address_of(user),
-            fixture_id,
-            outcome,
-            wager,
-            odds: odd ,  // Adjusting odds by dividing by 10^9
-        };
-        vector::push_back(&mut market.predictions, prediction);
-    }
-
-    public entry fun place_prediction_3(
         user: &signer,
         admin: address,
         fixture_id: u64,
@@ -331,7 +249,7 @@ module betos_addr::betos {
         let coin = coin::withdraw<AptosCoin>(user, wager);
         coin::deposit(@betos_addr, coin);
 
-        let odd:u64 = (odds as u64) / 1000000000;
+        let odd:u64 = (odds * 100 as u64) / 1000_000_000;
         // Store the prediction with the fetched odds
         let prediction = Prediction {
             user: signer::address_of(user),
@@ -346,7 +264,7 @@ module betos_addr::betos {
 
 
     /// Resolves a market and calculates rewards
-    public entry fun resolve_market_2(
+    public entry fun resolve_market(
         admin: &signer,
         fixture_id: u64,
         status: u8,
@@ -378,35 +296,54 @@ module betos_addr::betos {
         }
     }
     /// Resolves a market and calculates rewards
-    public entry fun resolve_market(
+    public entry fun resolve_market2(
         admin: &signer,
         fixture_id: u64,
         status: u8,
         result: u8
-    ) acquires Market {
-        let market = borrow_global_mut<Market>(signer::address_of(admin));
-        assert!(signer::address_of(admin) == market.admin, 102);
-        assert!(market.status == STATUS_SCHEDULED, 103);
+    ) acquires Markets, Rewards {
+        let market = borrow_global_mut<Markets>(@betos_addr);
+        let market_data = simple_map::borrow_mut(&mut market._id, &fixture_id);
 
-        market.status = status;
+        assert!(signer::address_of(admin) == market_data.admin, 102);
+        assert!(market_data.status == STATUS_SCHEDULED, 103);
+
+        market_data.status = status;
+
+        if (!exists<Rewards>(@betos_addr)) {
+            // Create the Rewards resource if it doesn't exist
+            let _reward_map: SimpleMap<u64, vector<Reward>> = simple_map::create();
+            move_to(admin, Rewards{_id: _reward_map});
+        };
+
+        let rewards = borrow_global_mut<Rewards>(@betos_addr);
+
+        if (!simple_map::contains_key(&rewards._id, &fixture_id)) {
+            // Create a new rewards vector for the fixture_id if it doesn't exist
+            let new_rewards_vector = vector::empty<Reward>();
+            simple_map::add(&mut rewards._id, fixture_id, new_rewards_vector);
+        };
+
+        let rewards_vector = simple_map::borrow_mut(&mut rewards._id, &fixture_id);
 
         if (status == STATUS_FINISHED) {
-            let len = vector::length(&market.predictions);
+            let len = vector::length(&market_data.predictions);
             let i = 0;
             while (i < len) {
-                let prediction = vector::borrow(&market.predictions, i);
+                let prediction = vector::borrow(&market_data.predictions, i);
                 if (prediction.outcome == result) {
                     let reward_amount = calculate_reward(prediction.wager, prediction.odds);
                     let reward = Reward {
                         user: prediction.user,
                         amount: reward_amount,
                     };
-                    move_to(admin, reward);
+                    vector::push_back(rewards_vector, reward);
                 };
                 i = i + 1;
             }
         }
     }
+
 
     /// Distributes APT tokens as rewards
     public entry fun distribute_rewards(admin: &signer) acquires Reward {
@@ -421,6 +358,33 @@ module betos_addr::betos {
         move_from<Reward>(admin_address);
     }
 
+    public entry fun distribute_rewards2(admin: &signer, fixture_id: u64) 
+    acquires Rewards 
+    {
+        assert!(signer::address_of(admin) == @betos_addr, 102);
+
+        // Ensure the Rewards resource exists
+        let rewards = borrow_global_mut<Rewards>(@betos_addr);
+
+        // Check if the fixture_id has an associated rewards vector
+        if (!simple_map::contains_key(&rewards._id, &fixture_id)) {
+            abort 103; // No rewards found for the given fixture_id
+        };
+
+        let rewards_vector = simple_map::borrow_mut(&mut rewards._id, &fixture_id);
+
+        let len = vector::length(rewards_vector);
+        let i = 0;
+        while (i < len) {
+            let reward = vector::borrow(rewards_vector, i);
+            coin::transfer<AptosCoin>(admin, reward.user, reward.amount);
+            i = i + 1;
+        };
+
+        // Once all rewards are distributed, remove the rewards vector for the fixture_id
+        simple_map::remove(&mut rewards._id, &fixture_id);
+    }
+
     /// Allows a user to withdraw their winnings
     public entry fun withdraw_winnings(user: &signer) acquires Reward {
         let reward = borrow_global_mut<Reward>(@betos_addr);
@@ -431,7 +395,7 @@ module betos_addr::betos {
 
     /// Calculates the reward based on the wager and odds
     fun calculate_reward(wager: u64, odds: u64): u64 {
-        wager * odds
+        (wager * odds)/100
     }
 
     
